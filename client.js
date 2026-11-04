@@ -641,6 +641,22 @@ window.__ModuleLoader__.load({
         setContinueInvalid(false);
       }, [gateKey]);
 
+      // ⭐【0.7.9】语音相关 hooks 必须在任何 early return 之前声明：
+      //   React 要求每次渲染的 hooks 数量一致；放在 if (!gate) 之后，首次渲染
+      //   （gate 为 null）会提前 return、跳过这些 hooks，等 gate 到达后 hooks 变多，
+      //   直接抛 Minified React error #300（Rendered fewer hooks than expected）。
+      const voiceRef = useRef(null);
+      const voiceTimer = useRef(null);
+      const [voiceQid, setVoiceQid] = useState('');
+      const [voiceSeconds, setVoiceSeconds] = useState(0);
+      const [voiceError, setVoiceError] = useState('');
+      const [voiceErrorQid, setVoiceErrorQid] = useState('');
+      useEffect(() => () => {
+        if (voiceTimer.current) { clearInterval(voiceTimer.current); voiceTimer.current = null; }
+        const v = voiceRef.current;
+        if (v) { try { v.stop(); } catch (e) { /* 忽略 */ } }
+      }, []);
+
       if (!gate) {
         return h('div', { className: 'wg-wrap' },
           STYLE_NODE,
@@ -865,12 +881,6 @@ window.__ModuleLoader__.load({
       //    录音 → 16kHz 单声道 WAV → base64 → transcribe（宿主的 speech 服务）→ 追加到备注
       //    一次只录一题；录音中按钮变“停止”并显示秒数。
       // ==================================================================
-      const voiceRef = useRef(null);
-      const voiceTimer = useRef(null);
-      const [voiceQid, setVoiceQid] = useState('');
-      const [voiceSeconds, setVoiceSeconds] = useState(0);
-      const [voiceError, setVoiceError] = useState('');
-      const [voiceErrorQid, setVoiceErrorQid] = useState('');
 
       const stopTicker = () => {
         if (voiceTimer.current) { clearInterval(voiceTimer.current); voiceTimer.current = null; }
@@ -942,13 +952,6 @@ window.__ModuleLoader__.load({
         if (voiceQid) return;
         void startVoice(qid);
       };
-
-      // 组件卸载时释放麦克风
-      useEffect(() => () => {
-        stopTicker();
-        const v = voiceRef.current;
-        if (v) { try { v.stop(); } catch (e) { /* 忽略 */ } }
-      }, []);
 
       const onSend = async () => {
         // ==================================================================
