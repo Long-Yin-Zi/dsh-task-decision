@@ -317,7 +317,27 @@ window.__ModuleLoader__.load({
     // ------------------------------------------------------------------
     // 跨组件 store：探针写入，面板读取（按 sessionId 分区）
     // ------------------------------------------------------------------
-    const gates = new Map();     // sessionId -> { gate, key, at }
+    const gates = new Map();     // sessionId -> { gate, key, at, submittedKey, cancelledKey, incoming }
+
+    // ⭐【0.8.5】持久化「这一轮已经处理过」的标记。
+    //   页面刷新 / 切到别的会话再回来时内存 store 是空的，探针会重新解析历史里的
+    //   gate_ask，把已经提交/取消过的轮次当成新的一轮又弹出来。用 localStorage 记住 key。
+    const HANDLED_PREFIX = 'dsh-task-decision:handled:';
+    function readHandled(sessionId) {
+      try {
+        const raw = window.localStorage.getItem(HANDLED_PREFIX + sessionId);
+        const arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr : [];
+      } catch (e) { return []; }
+    }
+    function isHandled(sessionId, key) { return readHandled(sessionId).indexOf(key) >= 0; }
+    function addHandled(sessionId, key) {
+      try {
+        const list = readHandled(sessionId).filter((k) => k !== key);
+        list.push(key);
+        window.localStorage.setItem(HANDLED_PREFIX + sessionId, JSON.stringify(list.slice(-30)));
+      } catch (e) { /* 隐私模式 / 无 localStorage 时忽略 */ }
+    }
     const listeners = new Set();
     function emit() { listeners.forEach((fn) => fn()); }
     function subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }
@@ -334,6 +354,7 @@ window.__ModuleLoader__.load({
       const key = JSON.stringify(gate);
       const prev = gates.get(sessionId);
       if (prev && prev.key === key) return 'same';
+      const handled = isHandled(sessionId, key);
       // ⭐【0.8.4】只有「有题且未提交/未取消」的旧轮才值得排队。
       //   0 题的 gate（本轮无待拍板）没有提交按钮，永远算“未完成”，
       //   以前会让顶部「切到新一轮」提示常年常驻。
@@ -352,7 +373,7 @@ window.__ModuleLoader__.load({
         key,
         at: Date.now(),
         submittedKey: prev ? prev.submittedKey : '',
-        cancelledKey: prev ? prev.cancelledKey : '',
+        cancelledKey: handled ? key : (prev ? prev.cancelledKey : ''),
         submittedSnapshot: null,
         incoming: null,
       });
@@ -389,6 +410,7 @@ window.__ModuleLoader__.load({
         submittedKey: row.key,
         submittedSnapshot: snapshot || null,
       }));
+      addHandled(sessionId, row.key);
       emit();
       // 旧轮处理完 → 自动切到排队的新一轮
       if (row.incoming) applyIncoming(sessionId);
@@ -403,6 +425,7 @@ window.__ModuleLoader__.load({
       const row = gates.get(sessionId);
       if (!row) return;
       gates.set(sessionId, Object.assign({}, row, { cancelledKey: row.key }));
+      addHandled(sessionId, row.key);
       emit();
       // 旧轮取消完 → 自动切到排队的新一轮
       if (row.incoming) applyIncoming(sessionId);
@@ -447,11 +470,14 @@ window.__ModuleLoader__.load({
       // ⭐【0.7.4】解析失败时做有限重试：工具节点/正文可能比 running=false 晚一拍落盘，
       //   之前一次解析不到就放弃，表现为“右边弹出空白面板”。
       const retryRef = useRef(0);
+      // ⭐【0.8.5】只有「刚跑完这一轮」才自动展开面板：
+      //   切会话、刷新页面时 running 一直是 false，以前也会解析历史节点然后弹出来。
+      const armedRef = useRef(false);
       const timerRef = useRef(null);
       const [parseTick, setParseTick] = useState(0);
 
       useEffect(() => {
-        if (running) { retryRef.current = 0; return undefined; }   // 流式输出中不解析
+        if (running) { retryRef.current = 0; armedRef.current = true; return undefined; }   // 流式输出中不解析
         if (!nodes || !nodes.length) return undefined;
         // 1) 主路径：工具调用 gate_ask 的参数（含嵌套 / 变体字段）
         let gate = parseToolGate(nodes);
@@ -480,7 +506,12 @@ window.__ModuleLoader__.load({
         retryRef.current = 0;
         const changed = setGate(sessionId, gate);
         // 'queued'（旧轮未完成，新一轮排队）也要把面板打开提醒用户
-        if ((changed === 'updated' || changed === 'queued') && gate.questions.length && typeof onGate === 'function') onGate();
+        // 只在本轮「刚跑完」且没处理过时自动打开；queued（旧轮未完成）也提醒一次
+        const fresh = armedRef.current && !isHandled(sessionId, JSON.stringify(gate));
+        if ((changed === 'updated' || changed === 'queued') && gate.questions.length && fresh && typeof onGate === 'function') {
+          armedRef.current = false;
+          onGate();
+        }
         return undefined;
       }, [running, nodes, sessionId, parseTick]);
 
@@ -1479,7 +1510,8 @@ window.__ModuleLoader__.load({
           const gate = findGateInNode(block, 0);
           if (!gate) return;
           const changed = setGate(sessionId, gate);
-          if (changed !== 'same' && gate.questions.length && typeof open === 'function') open();
+          // ⭐【0.8.5】切会话/刷新时聊天里的历史工具卡不再把面板弹出来，只写入 store
+          if (changed !== 'same') { /* store 已更新，打开交给页头按钮或自动探针 */ }
         } catch (e) { /* 解析失败不影响卡片显示 */ }
       }, [block, sessionId]);
       return h('div', { className: 'wg-tv' },
@@ -2056,7 +2088,7 @@ window.__ModuleLoader__.load({
 
     // 【调试出口】只读，供本地测试校验解析与回传格式
     try {
-      window.__GATE_DEBUG__ = { extractGate, parseToolGate, normalizeGate, buildReturn, buildPromptContent, fmtBytes, setGate, applyIncoming, getGate, markSubmitted, cancelGate, sendToSession, makeT };
+      window.__GATE_DEBUG__ = { extractGate, parseToolGate, normalizeGate, buildReturn, buildPromptContent, fmtBytes, setGate, applyIncoming, getGate, markSubmitted, cancelGate, sendToSession, makeT, gates, isHandled, addHandled };
     } catch (e) { /* 没有 window 也不影响插件 */ }
 
     return { inject, apply };
