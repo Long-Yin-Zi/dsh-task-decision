@@ -1180,44 +1180,41 @@ window.__ModuleLoader__.load({
                           rows: 2,
                           value: qNotes[q.id] || '',
                           onChange: (e) => setQNote(q.id, e.target.value),
-                        }),
-                        // ⭐【0.7.1】语音输入：录→转写→追加到这道题的备注
-                        h('div', { className: 'wg-voice-row' },
-                          h('button', {
-                            className: 'wg-mic'
-                              + (voiceQid === q.id ? ' wg-mic-on' : '')
-                              + (voiceBusy && voiceQid === q.id ? ' wg-mic-busy' : ''),
-                            title: voiceBusy && voiceQid === q.id
-                              ? t.voiceTranscribing
-                              : (voiceQid === q.id ? t.voiceStop : t.voiceStart),
-                            'aria-label': voiceBusy && voiceQid === q.id
-                              ? t.voiceTranscribing
-                              : (voiceQid === q.id ? t.voiceStop : t.voiceStart),
-                            disabled: voiceBusy && voiceQid === q.id,
-                            onClick: () => toggleVoice(q.id),
-                          },
-                          // ⭐【0.7.2】图标按钮：未录音=麦克风，录音中=停止方块，转写中=旋转圈
-                          // ⭐【0.8.0】点停止后立即进入转写态，给用户“已收到、正在识别”的反馈
-                          (voiceBusy && voiceQid === q.id)
-                            ? h('span', { className: 'wg-mic-spin' })
-                            : h('svg', { viewBox: '0 0 24 24', width: 15, height: 15, 'aria-hidden': 'true' },
-                              voiceQid === q.id
-                                ? h('rect', { x: 7, y: 7, width: 10, height: 10, rx: 2, fill: 'currentColor' })
-                                : [
-                                  h('path', { key: 'b', d: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z', fill: 'currentColor' }),
-                                  h('path', { key: 'a', d: 'M5.5 11a6.5 6.5 0 0 0 13 0', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' }),
-                                  h('path', { key: 's', d: 'M12 17.5V21', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' }),
-                                ]),
-                          voiceQid === q.id
-                            ? h('span', { className: 'wg-voice-sec' },
-                              voiceBusy ? t.voiceTranscribing : voiceSeconds + 's')
-                            : null),
-                          voiceError && voiceErrorQid === q.id
-                            ? h('span', { className: 'wg-voice-error' }, voiceError)
-                            : null)),
+                        })),
                       // ⭐【0.6.1】附件：点按钮选文件 / 在备注框里 Ctrl+V 粘贴
                       h('div', { className: 'wg-attach' },
-                        h('div', { className: 'wg-attach-bar' },
+                      h('div', { className: 'wg-attach-bar' },
+                        // ⭐【0.8.1】麦克风与「添加附件」同一行，且放在它前面
+                        h('button', {
+                          className: 'wg-mic'
+                            + (voiceQid === q.id ? ' wg-mic-on' : '')
+                            + (voiceBusy && voiceQid === q.id ? ' wg-mic-busy' : ''),
+                          title: voiceBusy && voiceQid === q.id
+                            ? t.voiceTranscribing
+                            : (voiceQid === q.id ? t.voiceStop : t.voiceStart),
+                          'aria-label': voiceBusy && voiceQid === q.id
+                            ? t.voiceTranscribing
+                            : (voiceQid === q.id ? t.voiceStop : t.voiceStart),
+                          disabled: voiceBusy && voiceQid === q.id,
+                          onClick: () => toggleVoice(q.id),
+                        },
+                        (voiceBusy && voiceQid === q.id)
+                          ? h('span', { className: 'wg-mic-spin' })
+                          : h('svg', { viewBox: '0 0 24 24', width: 15, height: 15, 'aria-hidden': 'true' },
+                            voiceQid === q.id
+                              ? h('rect', { x: 7, y: 7, width: 10, height: 10, rx: 2, fill: 'currentColor' })
+                              : [
+                                h('path', { key: 'b', d: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z', fill: 'currentColor' }),
+                                h('path', { key: 'a', d: 'M5.5 11a6.5 6.5 0 0 0 13 0', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' }),
+                                h('path', { key: 's', d: 'M12 17.5V21', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' }),
+                              ]),
+                        voiceQid === q.id
+                          ? h('span', { className: 'wg-voice-sec' },
+                            voiceBusy ? t.voiceTranscribing : voiceSeconds + 's')
+                          : null,
+                        voiceError && voiceErrorQid === q.id
+                          ? h('span', { className: 'wg-voice-error' }, voiceError)
+                          : null),
                           h('button', {
                             className: 'wg-attach-add',
                             onClick: () => pickFiles(q.id),
@@ -1741,7 +1738,7 @@ window.__ModuleLoader__.load({
 .wg-q-continue .wg-q-title{color:var(--wg-text-2)}
 
 /* 24 · 整题备注的语音输入 */
-.wg-voice-row{display:flex;align-items:center;gap:8px;margin-top:6px}
+/* 0.8.1 起麦克风并入附件行（.wg-attach-bar），不再单独一行 */
 .wg-mic{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;
   border:1px solid var(--wg-line-2);border-radius:8px;background:var(--wg-surface);color:var(--wg-text-2);
   cursor:pointer;transition:border-color 140ms ease-out,color 140ms ease-out,background-color 140ms ease-out}
