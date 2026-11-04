@@ -1097,8 +1097,21 @@ window.__ModuleLoader__.load({
                           h('button', {
                             className: 'wg-mic' + (voiceQid === q.id ? ' wg-mic-on' : ''),
                             title: voiceQid === q.id ? t.voiceStop : t.voiceStart,
+                            'aria-label': voiceQid === q.id ? t.voiceStop : t.voiceStart,
                             onClick: () => toggleVoice(q.id),
-                          }, voiceQid === q.id ? t.voiceStop + ' ' + voiceSeconds + 's' : t.voiceStart),
+                          },
+                          // ⭐【0.7.2】图标按钮：未录音=麦克风，录音中=停止方块
+                          h('svg', { viewBox: '0 0 24 24', width: 15, height: 15, 'aria-hidden': 'true' },
+                            voiceQid === q.id
+                              ? h('rect', { x: 7, y: 7, width: 10, height: 10, rx: 2, fill: 'currentColor' })
+                              : [
+                                h('path', { key: 'b', d: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z', fill: 'currentColor' }),
+                                h('path', { key: 'a', d: 'M5.5 11a6.5 6.5 0 0 0 13 0', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' }),
+                                h('path', { key: 's', d: 'M12 17.5V21', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' }),
+                              ]),
+                          voiceQid === q.id
+                            ? h('span', { className: 'wg-voice-sec' }, voiceSeconds + 's')
+                            : null),
                           voiceError && voiceErrorQid === q.id
                             ? h('span', { className: 'wg-voice-error' }, voiceError)
                             : null)),
@@ -1588,15 +1601,15 @@ window.__ModuleLoader__.load({
 
 /* 24 · 整题备注的语音输入 */
 .wg-voice-row{display:flex;align-items:center;gap:8px;margin-top:6px}
-.wg-mic{flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 10px;
-  border:1px dashed var(--wg-line-2);border-radius:6px;background:transparent;color:var(--wg-text-2);
-  font:inherit;font-size:11px;line-height:1;cursor:pointer;
-  transition:border-color 140ms ease-out,color 140ms ease-out,background-color 140ms ease-out}
-.wg-mic:hover:not(.wg-mic-on){border-color:var(--wg-accent);color:var(--wg-text)}
-.wg-mic-on{border-style:solid;border-color:var(--wg-bad);color:var(--wg-bad);
-  background:color-mix(in srgb,var(--wg-bad) 8%,transparent)}
-.wg-mic-on::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.wg-mic{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;
+  border:1px solid var(--wg-line-2);border-radius:8px;background:var(--wg-surface);color:var(--wg-text-2);
+  cursor:pointer;transition:border-color 140ms ease-out,color 140ms ease-out,background-color 140ms ease-out}
+.wg-mic:hover:not(.wg-mic-on){border-color:var(--wg-accent);color:var(--wg-accent)}
+.wg-mic-on{border-color:var(--wg-bad);color:var(--wg-bad);
+  background:color-mix(in srgb,var(--wg-bad) 10%,transparent)}
+.wg-mic svg{display:block}
 .wg-mic:focus-visible{outline:2px solid var(--wg-brand);outline-offset:1px}
+.wg-voice-sec{font-size:11px;line-height:16px;color:var(--wg-bad);font-variant-numeric:tabular-nums}
 .wg-voice-error{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-size:11px;line-height:16px;color:var(--wg-bad)}
 
@@ -1619,7 +1632,9 @@ window.__ModuleLoader__.load({
     // ------------------------------------------------------------------
     // 插件入口
     // ------------------------------------------------------------------
-    const inject = ['slots', 'locale', 'sidebarRightTabs', 'sessions'];
+    // ⭐【0.7.2】必须声明 remote：否则访问 ctx.remote.speech 会抛
+    //   cannot get property 'remote.speech' without inject
+    const inject = ['slots', 'locale', 'sidebarRightTabs', 'sessions', 'remote'];
 
     // ------------------------------------------------------------------
     // 发送器（模块级，便于测试）
@@ -1715,10 +1730,7 @@ window.__ModuleLoader__.load({
        */
       const transcribeSpeech = async (request) => {
         try {
-          let remote = null;
-          try { remote = ctx.remote; } catch (e) { remote = null; }
-          if (!remote || !remote.speech) remote = ctx.get('remote');
-          const speech = remote && remote.speech;
+          const speech = ctx.remote && ctx.remote.speech;
           if (!speech || typeof speech.transcribe !== 'function') {
             return { ok: false, error: { message: '当前 DSH 未提供语音转写服务' } };
           }
