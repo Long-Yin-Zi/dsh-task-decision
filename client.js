@@ -104,6 +104,7 @@ window.__ModuleLoader__.load({
       // ⭐【0.7.1】语音输入
       voiceStart: '语音输入',
       voiceStop: '停止',
+      voiceTranscribing: '转写中…',
       voiceUnavailable: '当前环境不支持录音',
       voiceDenied: '麦克风权限被拒绝',
       voiceEmpty: '没录到声音',
@@ -170,6 +171,7 @@ window.__ModuleLoader__.load({
       waitingHint: 'If the chat already shows a gate card but this panel is empty, wait a moment or reload the page (Ctrl+F5).',
       voiceStart: 'Voice input',
       voiceStop: 'Stop',
+      voiceTranscribing: 'Transcribing…',
       voiceUnavailable: 'Recording is not available in this environment',
       voiceDenied: 'Microphone permission was denied',
       voiceEmpty: 'No audio was recorded',
@@ -651,6 +653,9 @@ window.__ModuleLoader__.load({
       const [voiceSeconds, setVoiceSeconds] = useState(0);
       const [voiceError, setVoiceError] = useState('');
       const [voiceErrorQid, setVoiceErrorQid] = useState('');
+      // ⭐【0.8.0】转写中：点停止后立即置 true，按钮变旋转圈 + “转写中…”，
+      //   解决“点停止没反应、等一会才出字”的观感问题。
+      const [voiceBusy, setVoiceBusy] = useState(false);
       useEffect(() => () => {
         if (voiceTimer.current) { clearInterval(voiceTimer.current); voiceTimer.current = null; }
         const v = voiceRef.current;
@@ -933,6 +938,7 @@ window.__ModuleLoader__.load({
             voiceFail(qid, (e && e.message) || t.voiceFailed);
           } finally {
             stopTicker();
+            setVoiceBusy(false);
             setVoiceQid('');
             setVoiceSeconds(0);
             voiceRef.current = null;
@@ -946,7 +952,12 @@ window.__ModuleLoader__.load({
         voiceTimer.current = setInterval(() => setVoiceSeconds((n) => n + 1), 1000);
       };
 
-      const stopVoice = () => { const v = voiceRef.current; if (v) v.stop(); };
+      const stopVoice = () => {
+        const v = voiceRef.current;
+        if (!v) return;
+        setVoiceBusy(true);          // 立即反馈：按钮转圈、秒数位置变“转写中…”
+        try { v.stop(); } catch (e) { setVoiceBusy(false); }
+      };
       const toggleVoice = (qid) => {
         if (voiceQid === qid) { stopVoice(); return; }
         if (voiceQid) return;
@@ -1173,22 +1184,33 @@ window.__ModuleLoader__.load({
                         // ⭐【0.7.1】语音输入：录→转写→追加到这道题的备注
                         h('div', { className: 'wg-voice-row' },
                           h('button', {
-                            className: 'wg-mic' + (voiceQid === q.id ? ' wg-mic-on' : ''),
-                            title: voiceQid === q.id ? t.voiceStop : t.voiceStart,
-                            'aria-label': voiceQid === q.id ? t.voiceStop : t.voiceStart,
+                            className: 'wg-mic'
+                              + (voiceQid === q.id ? ' wg-mic-on' : '')
+                              + (voiceBusy && voiceQid === q.id ? ' wg-mic-busy' : ''),
+                            title: voiceBusy && voiceQid === q.id
+                              ? t.voiceTranscribing
+                              : (voiceQid === q.id ? t.voiceStop : t.voiceStart),
+                            'aria-label': voiceBusy && voiceQid === q.id
+                              ? t.voiceTranscribing
+                              : (voiceQid === q.id ? t.voiceStop : t.voiceStart),
+                            disabled: voiceBusy && voiceQid === q.id,
                             onClick: () => toggleVoice(q.id),
                           },
-                          // ⭐【0.7.2】图标按钮：未录音=麦克风，录音中=停止方块
-                          h('svg', { viewBox: '0 0 24 24', width: 15, height: 15, 'aria-hidden': 'true' },
-                            voiceQid === q.id
-                              ? h('rect', { x: 7, y: 7, width: 10, height: 10, rx: 2, fill: 'currentColor' })
-                              : [
-                                h('path', { key: 'b', d: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z', fill: 'currentColor' }),
-                                h('path', { key: 'a', d: 'M5.5 11a6.5 6.5 0 0 0 13 0', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' }),
-                                h('path', { key: 's', d: 'M12 17.5V21', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' }),
-                              ]),
+                          // ⭐【0.7.2】图标按钮：未录音=麦克风，录音中=停止方块，转写中=旋转圈
+                          // ⭐【0.8.0】点停止后立即进入转写态，给用户“已收到、正在识别”的反馈
+                          (voiceBusy && voiceQid === q.id)
+                            ? h('span', { className: 'wg-mic-spin' })
+                            : h('svg', { viewBox: '0 0 24 24', width: 15, height: 15, 'aria-hidden': 'true' },
+                              voiceQid === q.id
+                                ? h('rect', { x: 7, y: 7, width: 10, height: 10, rx: 2, fill: 'currentColor' })
+                                : [
+                                  h('path', { key: 'b', d: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z', fill: 'currentColor' }),
+                                  h('path', { key: 'a', d: 'M5.5 11a6.5 6.5 0 0 0 13 0', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' }),
+                                  h('path', { key: 's', d: 'M12 17.5V21', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' }),
+                                ]),
                           voiceQid === q.id
-                            ? h('span', { className: 'wg-voice-sec' }, voiceSeconds + 's')
+                            ? h('span', { className: 'wg-voice-sec' },
+                              voiceBusy ? t.voiceTranscribing : voiceSeconds + 's')
                             : null),
                           voiceError && voiceErrorQid === q.id
                             ? h('span', { className: 'wg-voice-error' }, voiceError)
@@ -1729,6 +1751,10 @@ window.__ModuleLoader__.load({
 .wg-mic svg{display:block}
 .wg-mic:focus-visible{outline:2px solid var(--wg-brand);outline-offset:1px}
 .wg-voice-sec{font-size:11px;line-height:16px;color:var(--wg-bad);font-variant-numeric:tabular-nums}
+.wg-mic-busy{cursor:progress;opacity:.9}
+.wg-mic-spin{display:block;width:13px;height:13px;border:2px solid currentColor;
+  border-right-color:transparent;border-radius:50%;animation:wg-spin .7s linear infinite}
+@keyframes wg-spin{to{transform:rotate(360deg)}}
 .wg-voice-error{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-size:11px;line-height:16px;color:var(--wg-bad)}
 
