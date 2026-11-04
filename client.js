@@ -338,6 +338,24 @@ window.__ModuleLoader__.load({
         window.localStorage.setItem(HANDLED_PREFIX + sessionId, JSON.stringify(list.slice(-30)));
       } catch (e) { /* 隐私模式 / 无 localStorage 时忽略 */ }
     }
+
+    // ⭐【0.8.6】自动弹过的轮次 key（同样按会话持久化）
+    const OPENED_PREFIX = 'dsh-task-decision:opened:';
+    function readOpened(sessionId) {
+      try {
+        const raw = window.localStorage.getItem(OPENED_PREFIX + sessionId);
+        const arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr : [];
+      } catch (e) { return []; }
+    }
+    function isOpened(sessionId, key) { return readOpened(sessionId).indexOf(key) >= 0; }
+    function markOpened(sessionId, key) {
+      try {
+        const list = readOpened(sessionId).filter((k) => k !== key);
+        list.push(key);
+        window.localStorage.setItem(OPENED_PREFIX + sessionId, JSON.stringify(list.slice(-30)));
+      } catch (e) { /* 隐私模式 / 无 localStorage 时忽略 */ }
+    }
     const listeners = new Set();
     function emit() { listeners.forEach((fn) => fn()); }
     function subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }
@@ -472,12 +490,13 @@ window.__ModuleLoader__.load({
       const retryRef = useRef(0);
       // ⭐【0.8.5】只有「刚跑完这一轮」才自动展开面板：
       //   切会话、刷新页面时 running 一直是 false，以前也会解析历史节点然后弹出来。
-      const armedRef = useRef(false);
+      // ⭐【0.8.6】是否自动弹过，改成按 key 持久化（不依赖 running 翻转，
+      //   因为探针可能在这一轮跑完之后才挂载，armed 永远没有机会置位 → 该弹的不弹）。
       const timerRef = useRef(null);
       const [parseTick, setParseTick] = useState(0);
 
       useEffect(() => {
-        if (running) { retryRef.current = 0; armedRef.current = true; return undefined; }   // 流式输出中不解析
+        if (running) { retryRef.current = 0; return undefined; }   // 流式输出中不解析
         if (!nodes || !nodes.length) return undefined;
         // 1) 主路径：工具调用 gate_ask 的参数（含嵌套 / 变体字段）
         let gate = parseToolGate(nodes);
@@ -506,10 +525,13 @@ window.__ModuleLoader__.load({
         retryRef.current = 0;
         const changed = setGate(sessionId, gate);
         // 'queued'（旧轮未完成，新一轮排队）也要把面板打开提醒用户
-        // 只在本轮「刚跑完」且没处理过时自动打开；queued（旧轮未完成）也提醒一次
-        const fresh = armedRef.current && !isHandled(sessionId, JSON.stringify(gate));
-        if ((changed === 'updated' || changed === 'queued') && gate.questions.length && fresh && typeof onGate === 'function') {
-          armedRef.current = false;
+        // ⭐【0.8.6】自动打开的判据：这一轮没处理过、也没弹过。
+        //   弹过就落盘，切会话 / 刷新不会重复弹；新的一轮照常弹。
+        const key = JSON.stringify(gate);
+        if (changed !== 'same' && gate.questions.length
+            && typeof onGate === 'function'
+            && !isHandled(sessionId, key) && !isOpened(sessionId, key)) {
+          markOpened(sessionId, key);
           onGate();
         }
         return undefined;
@@ -2088,7 +2110,7 @@ window.__ModuleLoader__.load({
 
     // 【调试出口】只读，供本地测试校验解析与回传格式
     try {
-      window.__GATE_DEBUG__ = { extractGate, parseToolGate, normalizeGate, buildReturn, buildPromptContent, fmtBytes, setGate, applyIncoming, getGate, markSubmitted, cancelGate, sendToSession, makeT, gates, isHandled, addHandled };
+      window.__GATE_DEBUG__ = { extractGate, parseToolGate, normalizeGate, buildReturn, buildPromptContent, fmtBytes, setGate, applyIncoming, getGate, markSubmitted, cancelGate, sendToSession, makeT, gates, isHandled, addHandled, isOpened, markOpened };
     } catch (e) { /* 没有 window 也不影响插件 */ }
 
     return { inject, apply };
