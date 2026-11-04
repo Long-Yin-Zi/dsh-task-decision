@@ -154,6 +154,7 @@ q2（推进节奏）: 选 a「做完一项再汇报」
 
 | 版本 | 内容 |
 |---|---|
+| 0.7.7 | 面板空白可诊断：外面包一层渲染错误边界（抛错时显示错误文本），空态显示版本号（`v0.7.7`），`.wg-wrap` 加最小高度 200px（防宿主容器高度为 0） |
 | 0.7.6 | 插件中心显示的标题/描述改成英文：`locale/zh.json` 的 meta 也改为 `Task Decision` + 英文描述（面板内文案仍跟随 DSH 语言） |
 | 0.7.5 | 语音改用 `ctx.get('remote')` 可选查找：直接写 `ctx.remote` 会受 Cordis fiber.inject 约束，而插件由宿主 bundle 加载、模块导出的 inject 未被采纳，因此仍抛 without inject |
 | 0.7.4 | 修“面板弹出但空白”：① 工具卡作为第二条数据通道（从 toolview 的 block 直接解析并写 store）② 解析兼容嵌套/变体字段（args/input/arguments/block…）③ 探针解析失败后 600ms×3 重试 ④ 空态文案改为「本轮还没有拍板项」+ 排查提示 |

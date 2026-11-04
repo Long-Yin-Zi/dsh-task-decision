@@ -25,6 +25,8 @@ window.__ModuleLoader__.load({
     const { useRef, useState, useEffect, useSyncExternalStore } = React;
 
     const NS = 'dsh-task-decision';
+    // ⭐【0.7.7】面板版本号：空态/错误边界会把它显示出来，方便确认到底跑的是哪一版
+    const PANEL_VERSION = '0.7.7';
     const START = 'dsh-gate:start';
     const END = 'dsh-gate:end';
     const TAB_KIND = 'dsh-task-decision';
@@ -644,7 +646,7 @@ window.__ModuleLoader__.load({
           STYLE_NODE,
           h('div', { className: 'wg-empty' },
             h('span', { className: 'wg-empty-ico' }),
-            h('div', { className: 'wg-empty-title' }, t.waitingTitle),
+            h('div', { className: 'wg-empty-title' }, t.waitingTitle + ' · v' + PANEL_VERSION),
             h('div', { className: 'wg-empty-hint' }, t.waitingHint)));
       }
 
@@ -1346,6 +1348,34 @@ window.__ModuleLoader__.load({
         && a.cancel === b.cancel)
       : GatePanel;
 
+    // ⭐【0.7.7】渲染错误边界：面板抛错时显示错误文本，而不是一整片空白。
+    //   排查“面板空白”时，至少能看到是哪一步抛的错。
+    class GateRenderBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { error: '' };
+      }
+
+      static getDerivedStateFromError(error) {
+        return { error: error && error.message ? error.message : String(error) };
+      }
+
+      render() {
+        if (this.state.error) {
+          return h('div', { className: 'wg-wrap' },
+            STYLE_NODE,
+            h('div', { className: 'wg-empty' },
+              h('div', { className: 'wg-empty-title' }, 'Panel render error · v' + PANEL_VERSION),
+              h('div', { className: 'wg-empty-hint' }, this.state.error)));
+        }
+        return this.props.children;
+      }
+    }
+
+    function GatePanelBoundary(props) {
+      return h(GateRenderBoundary, null, h(GatePanelMemo, props));
+    }
+
     // ------------------------------------------------------------------
     // 聊天流里的工具卡片：gate_ask 只显示一行，不把 JSON 摊在聊天里
     // ------------------------------------------------------------------
@@ -1424,7 +1454,7 @@ window.__ModuleLoader__.load({
   --wg-tint-bad:    color-mix(in srgb, var(--wg-bad) 6%, var(--wg-surface));
   --wg-ring-accent: color-mix(in srgb, var(--wg-accent) 38%, var(--wg-line));
   --wg-ring-bad:    color-mix(in srgb, var(--wg-bad) 46%, var(--wg-line));
-  display:flex; flex-direction:column; height:100%; min-height:0;
+  display:flex; flex-direction:column; height:100%; min-height:200px;
   background:var(--wg-surface); color:var(--wg-text);
   font-size:13px; line-height:1.7; -webkit-font-smoothing:antialiased;
 }
@@ -1895,7 +1925,7 @@ window.__ModuleLoader__.load({
         key: TAB_ID,
         locale: NS,
         inject: () => ({ t, submit, collapse: collapseSidebar, upload: uploadAttachment, cancel: cancelGate, transcribe: transcribeSpeech }),
-      }, GatePanelMemo));
+      }, GatePanelBoundary));
 
       ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
         name: 'tool.call.toolview',
