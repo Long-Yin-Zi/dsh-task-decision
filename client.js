@@ -334,7 +334,11 @@ window.__ModuleLoader__.load({
       const key = JSON.stringify(gate);
       const prev = gates.get(sessionId);
       if (prev && prev.key === key) return 'same';
+      // ⭐【0.8.4】只有「有题且未提交/未取消」的旧轮才值得排队。
+      //   0 题的 gate（本轮无待拍板）没有提交按钮，永远算“未完成”，
+      //   以前会让顶部「切到新一轮」提示常年常驻。
       const unfinished = prev && prev.gate
+        && Array.isArray(prev.gate.questions) && prev.gate.questions.length > 0
         && prev.submittedKey !== prev.key
         && prev.cancelledKey !== prev.key;
       if (unfinished) {
@@ -1819,8 +1823,12 @@ window.__ModuleLoader__.load({
 .wg-mic:focus-visible{outline:2px solid var(--wg-brand);outline-offset:1px}
 .wg-voice-sec{font-size:11px;line-height:16px;color:var(--wg-bad);font-variant-numeric:tabular-nums}
 .wg-mic-busy{cursor:progress;opacity:.9}
-.wg-mic-spin{display:block;width:13px;height:13px;border:2px solid currentColor;
-  border-right-color:transparent;border-radius:50%;animation:wg-spin .7s linear infinite}
+/* 转写中：方形外框（与 DSH 停止按钮一致的方形）+ 内部小环自转 */
+.wg-mic-spin{position:relative;display:block;width:14px;height:14px;box-sizing:border-box;
+  border:1.5px solid currentColor;border-radius:3px}
+.wg-mic-spin::after{content:"";position:absolute;inset:2px;border-radius:50%;box-sizing:border-box;
+  border:1.5px solid currentColor;border-right-color:transparent;border-bottom-color:transparent;
+  animation:wg-spin .8s linear infinite;will-change:transform}
 @keyframes wg-spin{to{transform:rotate(360deg)}}
 .wg-voice-error{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-size:11px;line-height:16px;color:var(--wg-bad)}
