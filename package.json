@@ -1,6 +1,6 @@
 {
-  "name": "task-decision",
-  "version": "0.6.5",
+  "name": "dsh-task-decision",
+  "version": "0.7.0",
   "type": "module",
   "description": "本轮工作 & 待拍板：把 AI 每轮回复里的待决问题收集到右侧边栏，一次性选完、写备注、提交回会话",
   "keywords": [
@@ -19,11 +19,11 @@
   "author": "tdcy",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Long-Yin-Zi/task-decision.git"
+    "url": "git+https://github.com/Long-Yin-Zi/dsh-task-decision.git"
   },
-  "homepage": "https://github.com/Long-Yin-Zi/task-decision#readme",
+  "homepage": "https://github.com/Long-Yin-Zi/dsh-task-decision#readme",
   "bugs": {
-    "url": "https://github.com/Long-Yin-Zi/task-decision/issues"
+    "url": "https://github.com/Long-Yin-Zi/dsh-task-decision/issues"
   },
   "exports": {
     ".": "./index.js",

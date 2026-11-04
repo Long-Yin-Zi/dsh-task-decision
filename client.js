@@ -1,5 +1,5 @@
 // ============================================================================
-// task-decision · 浏览器半部
+// dsh-task-decision · 浏览器半部
 // ----------------------------------------------------------------------------
 // 【整条链路】
 //   1) 模型在回复末尾输出 <!-- dsh-gate:start … dsh-gate:end --> 标记块
@@ -18,17 +18,17 @@
 // ============================================================================
 
 window.__ModuleLoader__.load({
-  id: 'task-decision',
+  id: 'dsh-task-decision',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
     const { useRef, useState, useEffect, useSyncExternalStore } = React;
 
-    const NS = 'task-decision';
+    const NS = 'dsh-task-decision';
     const START = 'dsh-gate:start';
     const END = 'dsh-gate:end';
-    const TAB_KIND = 'task-decision';
-    const TAB_ID = 'task-decision';
+    const TAB_KIND = 'dsh-task-decision';
+    const TAB_ID = 'dsh-task-decision';
 
     // ------------------------------------------------------------------
     // 文案
@@ -90,6 +90,12 @@ window.__ModuleLoader__.load({
       cancelConfirm: '确认取消',
       cancelledTitle: '本轮待拍板已取消',
       cancelledHint: '这些决策暂时不用处理了；AI 下一轮登记新问题时，这里会自动恢复。',
+      // ⭐【0.7.0】末尾固定附加的「继续思考」题
+      continueTitle: '继续深挖，还是直接开干',
+      continuePrompt: '问题都定了，剩下怎么走：先停下来把思路、细节、影响面、逻辑闭环讲清楚，我确认后再动手；还是直接按上面的选择执行？',
+      continueYes: '先继续讨论：讲清思路、细节、影响面、逻辑闭环，我确认后再动手',
+      continueNo: '不用讨论：直接按上面的选择开始执行',
+      continueRequired: '这题也要选一个才能提交',
     };
     const en = {
       tab: 'Work Summary & Gate',
@@ -142,6 +148,11 @@ window.__ModuleLoader__.load({
       cancelConfirm: 'Confirm skip',
       cancelledTitle: 'This round was skipped',
       cancelledHint: 'These decisions are no longer pending. A new gate will bring this panel back.',
+      continueTitle: 'Keep digging, or start now?',
+      continuePrompt: 'All decisions are settled. Do you want to talk through the approach, details, blast radius and closed loops first, or should I start executing your choices right away?',
+      continueYes: 'Discuss first: walk me through approach, details, blast radius and closed loops before acting',
+      continueNo: 'No discussion: start executing the choices above right away',
+      continueRequired: 'Pick one option here before submitting',
     };
 
     // ------------------------------------------------------------------
@@ -367,10 +378,27 @@ window.__ModuleLoader__.load({
       return head + ': 选 ' + parts.join('、') + tail;
     }
 
-    function buildReturn(gate, picked, notes, qNotes, overall) {
+    /**
+     * ⭐【0.7.0】「继续思考」不是模型登记的题，而是面板固定附加在最后的题。
+     *   它只产出一行给模型看的指令：选 a 先讲思路再动手；选 b 直接执行。
+     *   未选时返回空串（提交会被拦下，正常不会发生）。
+     */
+    function continueLine(choice) {
+      if (choice === 'a') {
+        return '【是否继续思考】选 a「先继续讨论」→ 先别动手：把思路、要改的细节、影响面、可能破坏的地方和逻辑闭环讲清楚，等我确认。';
+      }
+      if (choice === 'b') {
+        return '【是否继续思考】选 b「不用讨论」→ 不用再确认，直接按上面的结论开干。';
+      }
+      return '';
+    }
+
+    function buildReturn(gate, picked, notes, qNotes, overall, continueChoice) {
       const lines = ['【拍板回传】'];
       gate.questions.forEach((q) => { lines.push(qAnswerLine(q, picked, notes, qNotes)); });
       if (overall && overall.trim()) lines.push('（整体补充：' + overall.trim() + '）');
+      const cont = continueLine(continueChoice);
+      if (cont) lines.push(cont);
       return lines.join('\n');
     }
 
@@ -390,7 +418,7 @@ window.__ModuleLoader__.load({
      *   顺序 = 先写这题的文字，紧跟这题的附件，逐题串下去——
      *   这样模型读到某个图片/文件时，它前面紧挨着的那行就是"这属于哪道题"。
      */
-    function buildPromptContent(gate, picked, notes, qNotes, overall, attachments) {
+    function buildPromptContent(gate, picked, notes, qNotes, overall, attachments, continueChoice) {
       const blocks = [{ type: 'text', text: '【拍板回传】' }];
       gate.questions.forEach((q) => {
         const list = (attachments && attachments[q.id]) || [];
@@ -409,6 +437,8 @@ window.__ModuleLoader__.load({
         });
       });
       if (overall && overall.trim()) blocks.push({ type: 'text', text: '（整体补充：' + overall.trim() + '）' });
+      const cont = continueLine(continueChoice);
+      if (cont) blocks.push({ type: 'text', text: cont });
       return blocks;
     }
 
@@ -434,6 +464,9 @@ window.__ModuleLoader__.load({
       //   【为什么必须有】原来的备注只在"选中某个选项"后才出现，
       //   于是"上面的选项我都不想要"时——既没法表达意见，也提交不了。
       const [qNotes, setQNotes] = useState({});
+      // ⭐【0.7.0】末尾固定附加的「继续思考」题：'a' = 先讨论，'b' = 直接开干
+      const [continueChoice, setContinueChoice] = useState('');
+      const [continueInvalid, setContinueInvalid] = useState(false);
       // ⭐【0.6.0】每题附件：{ qid: [entry] }
       //   entry = { id, name, size, kind:'image'|'file', mediaType, previewUrl, data(base64),
       //             receiptId, status:'reading'|'uploading'|'ready'|'error', error, promise }
@@ -475,6 +508,8 @@ window.__ModuleLoader__.load({
         setPhase('idle');
         setErr('');
         setCancelArmed(false);
+        setContinueChoice('');
+        setContinueInvalid(false);
       }, [gateKey]);
 
       if (!gate) {
@@ -725,6 +760,13 @@ window.__ModuleLoader__.load({
           return;
         }
         setInvalid(false);
+        // ⭐【0.7.0】末尾的「继续思考」是必答题：没选就不发，免得 AI 不知道要不要先讨论
+        if (!continueChoice) {
+          setContinueInvalid(true);
+          setErr('');
+          return;
+        }
+        setContinueInvalid(false);
         setPhase('sending');
         setErr('');
         // 进入临界区：从这一刻起到 finally 之前，任何再次点击都会被闸①挡掉
@@ -757,14 +799,15 @@ window.__ModuleLoader__.load({
               name: e.name, size: e.size, kind: e.kind, previewUrl: e.previewUrl,
             }));
           });
-          await submit(sessionId, buildPromptContent(gate, picked, notes, qNotes, overall, attachments));
+          await submit(sessionId, buildPromptContent(gate, picked, notes, qNotes, overall, attachments, continueChoice));
           // ⭐【0.5.0】提交前存一份快照，供只读回放用（面板关掉重开也看得到）
-          markSubmitted(sessionId, { picked, notes, qNotes, overall, attachments: snapshotAttach });
+          markSubmitted(sessionId, { picked, notes, qNotes, overall, attachments: snapshotAttach, continueChoice });
           setPhase('done');
           setPicked({});
           setNotes({});
           setQNotes({});
           setOverall('');
+          setContinueChoice('');
           attachRef.current = {};
           // ⭐【2026-10 新增】提交成功后**自动收起右侧栏**，把注意力还给 AI 的回复
           //   【为什么延迟 350ms 再收】先把"已提交"这个状态渲染出来，
@@ -940,6 +983,47 @@ window.__ModuleLoader__.load({
                       bad ? h('div', { className: 'wg-invalid' }, t.needPickOrNote) : null),
                 );
               })),
+
+              // ⭐【0.7.0】固定附加的最后一题：继续深挖，还是直接开干（不占 gate 题数）
+              readonly
+                ? (replay && replay.continueChoice
+                  ? h('div', { className: 'wg-q wg-q-continue', 'data-answered': 'true' },
+                    h('div', { className: 'wg-q-top' },
+                      h('span', { className: 'wg-no' }, '?'),
+                      h('span', { className: 'wg-q-title' }, t.continueTitle),
+                      h('span', { className: 'wg-type' }, t.selectOne)),
+                    h('div', { className: 'wg-q-prompt' }, t.continuePrompt),
+                    h('div', { className: 'wg-answers' },
+                      h('div', { className: 'wg-answer' },
+                        h('span', { className: 'wg-answer-label' },
+                          replay.continueChoice === 'a' ? t.continueYes : t.continueNo))))
+                  : null)
+                : h('div', {
+                  className: 'wg-q wg-q-continue',
+                  'data-answered': continueChoice ? 'true' : 'false',
+                  'data-invalid': continueInvalid ? 'true' : 'false',
+                },
+                  h('div', { className: 'wg-q-top' },
+                    h('span', { className: 'wg-no' }, '?'),
+                    h('span', { className: 'wg-q-title' }, t.continueTitle),
+                    h('span', { className: 'wg-type' }, t.selectOne)),
+                  h('div', { className: 'wg-q-prompt' }, t.continuePrompt),
+                  h('div', { className: 'wg-opts' },
+                    [['a', t.continueYes], ['b', t.continueNo]].map((pair) =>
+                      h('div', { key: pair[0], className: 'wg-opt-wrap' },
+                        h('button', {
+                          className: 'wg-opt',
+                          'data-on': continueChoice === pair[0] ? 'true' : 'false',
+                          'data-type': 'single',
+                          onClick: () => {
+                            setContinueChoice(pair[0]);
+                            setContinueInvalid(false);
+                            setPhase('idle');
+                          },
+                        },
+                        h('span', { className: 'wg-mark' }),
+                        h('span', { className: 'wg-opt-label' }, pair[1]))))),
+                  continueInvalid ? h('div', { className: 'wg-invalid' }, t.continueRequired) : null),
 
           // ⭐【0.5.0】已提交时把「整体补充」也回放出来（原来只有输入框，提交完信息就没了）
           readonly && String((replay && replay.overall) || '').trim()
@@ -1342,6 +1426,11 @@ window.__ModuleLoader__.load({
 .wg-cancel:disabled{opacity:.5;cursor:default}
 .wg-cancel:focus-visible{outline:2px solid var(--wg-brand);outline-offset:2px}
 
+/* 23 · 末尾固定的「继续思考」题（虚线边框，和模型登记的问题区分） */
+.wg-q-continue{border-style:dashed}
+.wg-q-continue .wg-no{color:var(--wg-text-3)}
+.wg-q-continue .wg-q-title{color:var(--wg-text-2)}
+
 /* 12 · 提交中冻结 */
 .wg-wrap[data-phase="sending"] .wg-opt{pointer-events:none}
 @media (prefers-reduced-motion: reduce){
@@ -1416,7 +1505,7 @@ window.__ModuleLoader__.load({
       //   所有文案都落到中文兜底。这里把 zh/en 两张表注册进 NS，
       //   DSH 切成英文时才能拿到英文文案（中文仍是最终兜底，不会露出 key）。
       try {
-        ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'task-decision: dictionaries');
+        ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-task-decision: dictionaries');
       } catch (e) { /* 旧版本 locale 服务没有 register：退化成中文兜底，不影响使用 */ }
 
       // 【v0.2 修复】sidebarRight 不在客户端服务目录里，ctx.inject 根本不会触发；
@@ -1497,7 +1586,7 @@ window.__ModuleLoader__.load({
         id: TAB_ID,
         kind: TAB_KIND,
         title: () => t.tab,
-      }), 'task-decision: tab type');
+      }), 'dsh-task-decision: tab type');
 
       // 2) 注册 tab 内容
       ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
@@ -1517,7 +1606,7 @@ window.__ModuleLoader__.load({
       // 3) 页头常驻入口：tab 被关掉后还能从这里重新打开
       ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
         name: 'conversation.session.header.utilities',
-        id: 'task-decision-launcher',
+        id: 'dsh-task-decision-launcher',
         order: 59,
         locale: NS,
         inject: () => ({ t, open: openGateTab }),
@@ -1526,7 +1615,7 @@ window.__ModuleLoader__.load({
       // 4) 页头探针：解析本轮标记块
       ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
         name: 'conversation.session.header.utilities',
-        id: 'task-decision-probe',
+        id: 'dsh-task-decision-probe',
         order: 60,
         inject: () => ({ t, onGate: () => openGateTab() }),
       }, GateProbe));
