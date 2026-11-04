@@ -154,6 +154,7 @@ q2（推进节奏）: 选 a「做完一项再汇报」
 
 | 版本 | 内容 |
 |---|---|
+| 0.7.8 | 语音再修：Cordis 对嵌套服务名按 `remote.speech` 判定注入，因此 inject 同时声明 `remote` 与 `remote.speech`，取值时先试 `ctx.get('remote.speech')`；错误文案带版本号便于确认 |
 | 0.7.7 | 面板空白可诊断：外面包一层渲染错误边界（抛错时显示错误文本），空态显示版本号（`v0.7.7`），`.wg-wrap` 加最小高度 200px（防宿主容器高度为 0） |
 | 0.7.6 | 插件中心显示的标题/描述改成英文：`locale/zh.json` 的 meta 也改为 `Task Decision` + 英文描述（面板内文案仍跟随 DSH 语言） |
 | 0.7.5 | 语音改用 `ctx.get('remote')` 可选查找：直接写 `ctx.remote` 会受 Cordis fiber.inject 约束，而插件由宿主 bundle 加载、模块导出的 inject 未被采纳，因此仍抛 without inject |

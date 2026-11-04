@@ -1750,7 +1750,8 @@ window.__ModuleLoader__.load({
     // ------------------------------------------------------------------
     // ⭐【0.7.2】必须声明 remote：否则访问 ctx.remote.speech 会抛
     //   cannot get property 'remote.speech' without inject
-    const inject = ['slots', 'locale', 'sidebarRightTabs', 'sessions', 'remote'];
+    // ⭐【0.7.8】Cordis 对嵌套服务名的注入检查是按 'remote.speech' 判定的，两个名字都声明上
+    const inject = ['slots', 'locale', 'sidebarRightTabs', 'sessions', 'remote', 'remote.speech'];
 
     // ------------------------------------------------------------------
     // 发送器（模块级，便于测试）
@@ -1846,27 +1847,24 @@ window.__ModuleLoader__.load({
        */
       const transcribeSpeech = async (request) => {
         try {
-          // ⭐【0.7.5】用 ctx.get 做可选查找：
-          //   直接写 ctx.remote 会受 Cordis fiber.inject 声明约束，
-          //   而我们的插件由宿主 bundle 加载，模块导出的 inject 未被采纳，
-          //   所以一律抛 cannot get property … without inject。
-          let remote = null;
-          try { remote = ctx.get('remote'); } catch (e) { remote = null; }
-          if (!remote) {
-            return { ok: false, error: { message: '当前 DSH 未加载 remote 服务（语音不可用）' } };
+          // ⭐【0.7.8】优先按带点的服务名直接取：Cordis 对 nested 服务的注入检查按 'remote.speech' 判定，
+          //   ctx.get('remote').speech 在未声明时会抛 cannot get property … without inject。
+          let speech = null;
+          try { speech = ctx.get('remote.speech'); } catch (e) { speech = null; }
+          if (!speech) {
+            let remote = null;
+            try { remote = ctx.get('remote'); } catch (e) { remote = null; }
+            if (remote) {
+              try { speech = remote.speech; } catch (e) { speech = null; }
+            }
           }
-          const speech = remote.speech;
           if (!speech || typeof speech.transcribe !== 'function') {
-            return { ok: false, error: { message: '当前 DSH 未启用语音转写服务' } };
+            return { ok: false, error: { message: '当前 DSH 未启用语音转写服务（v0.7.8）' } };
           }
           return await speech.transcribe(request);
         } catch (e) {
           const msg = e && e.message ? e.message : String(e);
-          // Cordis 的注入报错对用户不可读，换成可执行的提示
-          if (/without inject|not declared|service not found/i.test(msg)) {
-            return { ok: false, error: { message: '语音服务未加载（插件缺少 remote 依赖，请更新到 0.7.3 之后）' } };
-          }
-          return { ok: false, error: { message: msg } };
+          return { ok: false, error: { message: '语音服务不可用：' + msg + '（v0.7.8）' } };
         }
       };
 
