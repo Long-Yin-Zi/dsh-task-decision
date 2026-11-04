@@ -96,6 +96,9 @@ window.__ModuleLoader__.load({
       continueYes: '先继续讨论：讲清思路、细节、影响面、逻辑闭环，我确认后再动手',
       continueNo: '不用讨论：直接按上面的选择开始执行',
       continueRequired: '这题也要选一个才能提交',
+      // ⭐【0.7.4】面板空态
+      waitingTitle: '本轮还没有拍板项',
+      waitingHint: '如果对话里已经出现「本轮有待拍板项」卡片但这里还是空的，稍等几秒或刷新页面（Ctrl+F5）。',
       // ⭐【0.7.1】语音输入
       voiceStart: '语音输入',
       voiceStop: '停止',
@@ -161,6 +164,8 @@ window.__ModuleLoader__.load({
       continueYes: 'Discuss first: walk me through approach, details, blast radius and closed loops before acting',
       continueNo: 'No discussion: start executing the choices above right away',
       continueRequired: 'Pick one option here before submitting',
+      waitingTitle: 'No decisions registered yet',
+      waitingHint: 'If the chat already shows a gate card but this panel is empty, wait a moment or reload the page (Ctrl+F5).',
       voiceStart: 'Voice input',
       voiceStop: 'Stop',
       voiceUnavailable: 'Recording is not available in this environment',
@@ -198,15 +203,67 @@ window.__ModuleLoader__.load({
 
     // 【v0.2 主路径】从 tool-result 节点里取 gate_ask 的参数
     //   legacy 节点形如 { kind:'tool-result', call:{ name, argsRaw } }
+    /**
+     * ⭐【0.7.4】从任意「形似」参数容器里取出 gate：
+     *   不同 DSH 版本/阶段给的字段不一样（argsRaw / args / input / arguments / block.args …），
+     *   这里逐层拆到含 questions 的那一层，再用 normalizeGate 统一。
+     */
+    function gateFromArgs(value) {
+      let v = value;
+      const seen = new Set();
+      for (let i = 0; i < 5; i += 1) {
+        if (v === undefined || v === null) return null;
+        if (typeof v === 'string') {
+          try { v = JSON.parse(v); } catch (e) { return null; }
+          continue;
+        }
+        if (typeof v !== 'object') return null;
+        if (Array.isArray(v.questions)) return normalizeGate(v);
+        if (seen.has(v)) return null;
+        seen.add(v);
+        v = v.args !== undefined ? v.args
+          : v.argsRaw !== undefined ? v.argsRaw
+            : v.input !== undefined ? v.input
+              : v.arguments !== undefined ? v.arguments
+                : v.parameters !== undefined ? v.parameters
+                  : v.block !== undefined ? v.block
+                    : v.call !== undefined ? v.call
+                      : undefined;
+      }
+      return null;
+    }
+
+    /** 递归找节点里的 gate_ask 调用（兼容 tool-result / tool / 嵌套 block 等形状） */
+    function findGateInNode(node, depth) {
+      if (!node || typeof node !== 'object' || depth > 4) return null;
+      const name = node.name
+        || (node.call && node.call.name)
+        || (node.tool && node.tool.name);
+      if (name === 'gate_ask') {
+        const g = gateFromArgs(node.argsRaw !== undefined ? node.argsRaw : node);
+        if (g) return g;
+      }
+      for (const key of ['call', 'block', 'blocks', 'content', 'result', 'output', 'children', 'data']) {
+        const child = node[key];
+        if (!child) continue;
+        if (Array.isArray(child)) {
+          for (const item of child) {
+            const r = findGateInNode(item, depth + 1);
+            if (r) return r;
+          }
+          continue;
+        }
+        const r = findGateInNode(child, depth + 1);
+        if (r) return r;
+      }
+      return null;
+    }
+
     function parseToolGate(nodes) {
       if (!Array.isArray(nodes)) return null;
       for (let i = nodes.length - 1; i >= 0; i -= 1) {
-        const n = nodes[i];
-        if (!n || n.kind !== 'tool-result' || !n.call) continue;
-        if (n.call.name !== 'gate_ask') continue;
-        const raw = n.call.argsRaw;
-        if (typeof raw !== 'string' || !raw) continue;
-        try { return normalizeGate(JSON.parse(raw)); } catch (e) { return null; }
+        const g = findGateInNode(nodes[i], 0);
+        if (g) return g;
       }
       return null;
     }
@@ -331,10 +388,16 @@ window.__ModuleLoader__.load({
         return legacy && Array.isArray(legacy.nodes) ? legacy.nodes : EMPTY;
       });
 
+      // ⭐【0.7.4】解析失败时做有限重试：工具节点/正文可能比 running=false 晚一拍落盘，
+      //   之前一次解析不到就放弃，表现为“右边弹出空白面板”。
+      const retryRef = useRef(0);
+      const timerRef = useRef(null);
+      const [parseTick, setParseTick] = useState(0);
+
       useEffect(() => {
-        if (running) return;                       // 流式输出中不解析
-        if (!nodes || !nodes.length) return;
-        // 1) 主路径：工具调用 gate_ask 的参数
+        if (running) { retryRef.current = 0; return undefined; }   // 流式输出中不解析
+        if (!nodes || !nodes.length) return undefined;
+        // 1) 主路径：工具调用 gate_ask 的参数（含嵌套 / 变体字段）
         let gate = parseToolGate(nodes);
         // 2) 兼容路径：正文里的文本标记块
         if (!gate) {
@@ -350,10 +413,19 @@ window.__ModuleLoader__.load({
           }
           gate = extractGate(text);
         }
-        if (!gate) return;
+        if (!gate) {
+          retryRef.current += 1;
+          if (retryRef.current <= 3) {
+            timerRef.current = setTimeout(() => setParseTick((n) => n + 1), 600);
+            return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+          }
+          return undefined;
+        }
+        retryRef.current = 0;
         const changed = setGate(sessionId, gate);
         if (changed && gate.questions.length && typeof onGate === 'function') onGate();
-      }, [running, nodes, sessionId]);
+        return undefined;
+      }, [running, nodes, sessionId, parseTick]);
 
       return null;                                  // 零尺寸
     }
@@ -572,7 +644,8 @@ window.__ModuleLoader__.load({
           STYLE_NODE,
           h('div', { className: 'wg-empty' },
             h('span', { className: 'wg-empty-ico' }),
-            h('div', { className: 'wg-loading' }, t.loading)));
+            h('div', { className: 'wg-empty-title' }, t.waitingTitle),
+            h('div', { className: 'wg-empty-hint' }, t.waitingHint)));
       }
 
       // ⭐【0.6.2】已取消：只留摘要 + 一条"本轮不用拍板"的说明，底部不出现提交按钮
@@ -1277,7 +1350,20 @@ window.__ModuleLoader__.load({
     // 聊天流里的工具卡片：gate_ask 只显示一行，不把 JSON 摊在聊天里
     // ------------------------------------------------------------------
     function GateToolView(props) {
-      const { t, open } = props;
+      const { t, open, sessionId, block } = props;
+      // ⭐【0.7.4】工具卡是另一条可靠的兜底通道：
+      //   只要聊天流里出现了 gate_ask 卡片，就说明这一轮确实有拍板项；
+      //   此时直接从卡片携带的 block 里解析并写入 store，
+      //   即使页头探针因为节点结构差异没解析出来，面板也不会是空的。
+      useEffect(() => {
+        if (!sessionId || !block) return;
+        try {
+          const gate = findGateInNode(block, 0);
+          if (!gate) return;
+          const changed = setGate(sessionId, gate);
+          if (changed && gate.questions.length && typeof open === 'function') open();
+        } catch (e) { /* 解析失败不影响卡片显示 */ }
+      }, [block, sessionId]);
       return h('div', { className: 'wg-tv' },
         h('span', { className: 'wg-tv-ico' }, '\uD83D\uDCCB'),
         h('span', { className: 'wg-tv-text' }, t.toolview),
