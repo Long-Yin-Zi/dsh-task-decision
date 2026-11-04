@@ -101,6 +101,9 @@ window.__ModuleLoader__.load({
       // ⭐【0.7.4】面板空态
       waitingTitle: '本轮还没有拍板项',
       waitingHint: '如果对话里已经出现「本轮有待拍板项」卡片但这里还是空的，稍等几秒或刷新页面（Ctrl+F5）。',
+      // ⭐【0.8.3】新一轮排队提示
+      incomingHint: '上一轮拍板还没提交，新一轮已到达',
+      incomingSwitch: '切到新一轮',
       // ⭐【0.7.1】语音输入
       voiceStart: '语音输入',
       voiceStop: '停止',
@@ -169,6 +172,8 @@ window.__ModuleLoader__.load({
       continueRequired: 'Pick one option here before submitting',
       waitingTitle: 'No decisions registered yet',
       waitingHint: 'If the chat already shows a gate card but this panel is empty, wait a moment or reload the page (Ctrl+F5).',
+      incomingHint: 'A new round arrived while the previous one is still open',
+      incomingSwitch: 'Switch to new round',
       voiceStart: 'Voice input',
       voiceStop: 'Stop',
       voiceTranscribing: 'Transcribing…',
@@ -320,12 +325,51 @@ window.__ModuleLoader__.load({
       const row = gates.get(sessionId);
       return row ? row.gate : null;
     }
+    /**
+     * ⭐【0.8.3】写入本轮 gate。返回值：
+     *   'same' —— 内容没变；'updated' —— 已替换为主 gate；
+     *   'queued' —— 上一轮还没提交/取消，新一轮先排队（不覆盖，避免未选的拍板被掩盖）。
+     */
     function setGate(sessionId, gate) {
       const key = JSON.stringify(gate);
       const prev = gates.get(sessionId);
-      if (prev && prev.key === key) return false;
-      // 新的一轮结果进来时保留 submittedKey（旧轮的），新 key 与它不等 → 角标重新计数
-      gates.set(sessionId, { gate, key, at: Date.now(), submittedKey: prev ? prev.submittedKey : '' });
+      if (prev && prev.key === key) return 'same';
+      const unfinished = prev && prev.gate
+        && prev.submittedKey !== prev.key
+        && prev.cancelledKey !== prev.key;
+      if (unfinished) {
+        // 旧题留在面板里，顶部会提示“新一轮已到达”，用户提交/取消后自动切过去
+        gates.set(sessionId, Object.assign({}, prev, { incoming: gate }));
+        emit();
+        return 'queued';
+      }
+      gates.set(sessionId, {
+        gate,
+        key,
+        at: Date.now(),
+        submittedKey: prev ? prev.submittedKey : '',
+        cancelledKey: prev ? prev.cancelledKey : '',
+        submittedSnapshot: null,
+        incoming: null,
+      });
+      emit();
+      return 'updated';
+    }
+
+    /** 把排队的新一轮提升为主 gate（用户点「切到新一轮」或旧轮已处理完） */
+    function applyIncoming(sessionId) {
+      const row = gates.get(sessionId);
+      if (!row || !row.incoming) return false;
+      const next = row.incoming;
+      gates.set(sessionId, {
+        gate: next,
+        key: JSON.stringify(next),
+        at: Date.now(),
+        submittedKey: row.submittedKey,
+        cancelledKey: row.cancelledKey,
+        submittedSnapshot: null,
+        incoming: null,
+      });
       emit();
       return true;
     }
@@ -342,6 +386,8 @@ window.__ModuleLoader__.load({
         submittedSnapshot: snapshot || null,
       }));
       emit();
+      // 旧轮处理完 → 自动切到排队的新一轮
+      if (row.incoming) applyIncoming(sessionId);
     }
 
     /**
@@ -354,6 +400,8 @@ window.__ModuleLoader__.load({
       if (!row) return;
       gates.set(sessionId, Object.assign({}, row, { cancelledKey: row.key }));
       emit();
+      // 旧轮取消完 → 自动切到排队的新一轮
+      if (row.incoming) applyIncoming(sessionId);
     }
 
     function makeT(ctx) {
@@ -427,7 +475,8 @@ window.__ModuleLoader__.load({
         }
         retryRef.current = 0;
         const changed = setGate(sessionId, gate);
-        if (changed && gate.questions.length && typeof onGate === 'function') onGate();
+        // 'queued'（旧轮未完成，新一轮排队）也要把面板打开提醒用户
+        if ((changed === 'updated' || changed === 'queued') && gate.questions.length && typeof onGate === 'function') onGate();
         return undefined;
       }, [running, nodes, sessionId, parseTick]);
 
@@ -577,7 +626,7 @@ window.__ModuleLoader__.load({
     // 面板
     // ------------------------------------------------------------------
     function GatePanel(props) {
-      const { t, submit, sessionId, collapse, upload, cancel, transcribe } = props;
+      const { t, submit, sessionId, collapse, upload, cancel, transcribe, applyIncoming } = props;
       const row = useSyncExternalStore(
         subscribe,
         () => gates.get(sessionId) || null,
@@ -1101,6 +1150,16 @@ window.__ModuleLoader__.load({
           total ? h('span', { className: 'wg-count' }, String(total)) : null,
           flagText ? h('span', { className: 'wg-flag', 'data-tone': flagTone || undefined }, flagText) : null),
 
+        // ⭐【0.8.3】上一轮还没提交/取消时，新一轮先排队：顶部提示，可一键切过去
+        row && row.incoming
+          ? h('div', { className: 'wg-incoming' },
+            h('span', { className: 'wg-incoming-text' }, t.incomingHint),
+            h('button', {
+              className: 'wg-incoming-btn',
+              onClick: () => { if (typeof applyIncoming === 'function') applyIncoming(sessionId); },
+            }, t.incomingSwitch))
+          : null,
+
         h('div', { className: 'wg-scroll' },
           h('section', { className: 'wg-block' },
             h('div', { className: 'wg-label' }, t.summary),
@@ -1416,7 +1475,7 @@ window.__ModuleLoader__.load({
           const gate = findGateInNode(block, 0);
           if (!gate) return;
           const changed = setGate(sessionId, gate);
-          if (changed && gate.questions.length && typeof open === 'function') open();
+          if (changed !== 'same' && gate.questions.length && typeof open === 'function') open();
         } catch (e) { /* 解析失败不影响卡片显示 */ }
       }, [block, sessionId]);
       return h('div', { className: 'wg-tv' },
@@ -1486,6 +1545,14 @@ window.__ModuleLoader__.load({
 .wg-wrap,.wg-wrap *{box-sizing:border-box}
 .wg-head{flex:0 0 auto;display:flex;align-items:center;gap:8px;
   height:44px;padding:0 16px;border-bottom:1px solid var(--wg-line)}
+/* ⭐【0.8.3】新一轮排队提示条 */
+.wg-incoming{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 16px;
+  border-bottom:1px solid var(--wg-line);background:color-mix(in srgb,var(--wg-warn) 8%,transparent)}
+.wg-incoming-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:11.5px;line-height:16px;color:var(--wg-text-2)}
+.wg-incoming-btn{flex:0 0 auto;height:24px;padding:0 10px;border-radius:6px;border:1px solid var(--wg-line-2);
+  background:transparent;color:var(--wg-accent);font:inherit;font-size:11px;line-height:1;cursor:pointer}
+.wg-incoming-btn:hover{border-color:var(--wg-accent)}
 .wg-head-title{font-size:14px;font-weight:600;line-height:20px;color:var(--wg-text);letter-spacing:0}
 .wg-count{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:18px;padding:0 6px;
   border-radius:6px;background:var(--wg-sunken);font-size:11px;font-weight:600;line-height:18px;
@@ -1951,7 +2018,7 @@ window.__ModuleLoader__.load({
         name: 'sidebar.right.pane.tab',
         key: TAB_ID,
         locale: NS,
-        inject: () => ({ t, submit, collapse: collapseSidebar, upload: uploadAttachment, cancel: cancelGate, transcribe: transcribeSpeech }),
+        inject: () => ({ t, submit, collapse: collapseSidebar, upload: uploadAttachment, cancel: cancelGate, transcribe: transcribeSpeech, applyIncoming }),
       }, GatePanelBoundary));
 
       ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
@@ -1981,7 +2048,7 @@ window.__ModuleLoader__.load({
 
     // 【调试出口】只读，供本地测试校验解析与回传格式
     try {
-      window.__GATE_DEBUG__ = { extractGate, parseToolGate, normalizeGate, buildReturn, buildPromptContent, fmtBytes, setGate, getGate, markSubmitted, cancelGate, sendToSession, makeT };
+      window.__GATE_DEBUG__ = { extractGate, parseToolGate, normalizeGate, buildReturn, buildPromptContent, fmtBytes, setGate, applyIncoming, getGate, markSubmitted, cancelGate, sendToSession, makeT };
     } catch (e) { /* 没有 window 也不影响插件 */ }
 
     return { inject, apply };
