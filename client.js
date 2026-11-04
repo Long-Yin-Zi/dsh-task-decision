@@ -96,6 +96,14 @@ window.__ModuleLoader__.load({
       continueYes: '先继续讨论：讲清思路、细节、影响面、逻辑闭环，我确认后再动手',
       continueNo: '不用讨论：直接按上面的选择开始执行',
       continueRequired: '这题也要选一个才能提交',
+      // ⭐【0.7.1】语音输入
+      voiceStart: '语音输入',
+      voiceStop: '停止',
+      voiceUnavailable: '当前环境不支持录音',
+      voiceDenied: '麦克风权限被拒绝',
+      voiceEmpty: '没录到声音',
+      voiceEmptyText: '没识别出文字',
+      voiceFailed: '语音识别失败',
     };
     const en = {
       tab: 'Work Summary & Gate',
@@ -153,6 +161,13 @@ window.__ModuleLoader__.load({
       continueYes: 'Discuss first: walk me through approach, details, blast radius and closed loops before acting',
       continueNo: 'No discussion: start executing the choices above right away',
       continueRequired: 'Pick one option here before submitting',
+      voiceStart: 'Voice input',
+      voiceStop: 'Stop',
+      voiceUnavailable: 'Recording is not available in this environment',
+      voiceDenied: 'Microphone permission was denied',
+      voiceEmpty: 'No audio was recorded',
+      voiceEmptyText: 'No text was recognized',
+      voiceFailed: 'Speech recognition failed',
     };
 
     // ------------------------------------------------------------------
@@ -409,6 +424,46 @@ window.__ModuleLoader__.load({
       return (v / 1024 / 1024).toFixed(1) + ' MB';
     }
 
+    // ------------------------------------------------------------------
+    // 语音输入（0.7.1）：录音 → 16kHz 单声道 WAV → base64 → 宿主转写
+    //   宿主提供的接口是 ctx.remote.speech.transcribe({ audioBase64 }) → { text }
+    //   我们自己只负责“把麦克风声音变成它要的 WAV”。
+    // ------------------------------------------------------------------
+    function encodeWav(samples, sampleRate) {
+      const view = new DataView(new ArrayBuffer(44 + samples.length * 2));
+      const writeStr = (offset, str) => {
+        for (let i = 0; i < str.length; i += 1) view.setUint8(offset + i, str.charCodeAt(i));
+      };
+      writeStr(0, 'RIFF');
+      view.setUint32(4, 36 + samples.length * 2, true);
+      writeStr(8, 'WAVE');
+      writeStr(12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * 2, true);
+      view.setUint16(32, 2, true);
+      view.setUint16(34, 16, true);
+      writeStr(36, 'data');
+      view.setUint32(40, samples.length * 2, true);
+      let off = 44;
+      for (let i = 0; i < samples.length; i += 1, off += 2) {
+        const s = Math.max(-1, Math.min(1, samples[i]));
+        view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      }
+      return new Uint8Array(view.buffer);
+    }
+
+    function bytesToBase64(bytes) {
+      let binary = '';
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+      }
+      return btoa(binary);
+    }
+
     /**
      * ⭐【0.6.0】把「文字 + 附件」组装成 DSH 的消息内容块。
      *   DSH 的消息通道只认三种块：
@@ -446,7 +501,7 @@ window.__ModuleLoader__.load({
     // 面板
     // ------------------------------------------------------------------
     function GatePanel(props) {
-      const { t, submit, sessionId, collapse, upload, cancel } = props;
+      const { t, submit, sessionId, collapse, upload, cancel, transcribe } = props;
       const row = useSyncExternalStore(
         subscribe,
         () => gates.get(sessionId) || null,
@@ -730,6 +785,96 @@ window.__ModuleLoader__.load({
         addFiles(qid, files);
       };
 
+      // ==================================================================
+      //  ⭐【0.7.1】语音输入：整题备注框的麦克风按钮
+      //    录音 → 16kHz 单声道 WAV → base64 → transcribe（宿主的 speech 服务）→ 追加到备注
+      //    一次只录一题；录音中按钮变“停止”并显示秒数。
+      // ==================================================================
+      const voiceRef = useRef(null);
+      const voiceTimer = useRef(null);
+      const [voiceQid, setVoiceQid] = useState('');
+      const [voiceSeconds, setVoiceSeconds] = useState(0);
+      const [voiceError, setVoiceError] = useState('');
+      const [voiceErrorQid, setVoiceErrorQid] = useState('');
+
+      const stopTicker = () => {
+        if (voiceTimer.current) { clearInterval(voiceTimer.current); voiceTimer.current = null; }
+      };
+      const voiceFail = (qid, message) => { setVoiceError(message); setVoiceErrorQid(qid); };
+
+      const startVoice = async (qid) => {
+        if (voiceQid) return;
+        setVoiceError('');
+        const md = navigator.mediaDevices;
+        if (!md || typeof MediaRecorder === 'undefined') { voiceFail(qid, t.voiceUnavailable); return; }
+        let stream;
+        try {
+          stream = await md.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
+        } catch (e) {
+          voiceFail(qid, (e && e.name === 'NotAllowedError') ? t.voiceDenied : t.voiceUnavailable);
+          return;
+        }
+        const rec = new MediaRecorder(stream);
+        const chunks = [];
+        rec.ondataavailable = (ev) => { if (ev.data && ev.data.size) chunks.push(ev.data); };
+        rec.onstop = async () => {
+          try {
+            stream.getTracks().forEach((tr) => tr.stop());
+            if (!chunks.length) throw new Error(t.voiceEmpty);
+            const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const decoded = await audioCtx.decodeAudioData(await blob.arrayBuffer());
+            const rate = 16000;
+            const frames = Math.max(1, Math.floor(decoded.duration * rate));
+            const offline = new OfflineAudioContext(1, frames, rate);
+            const src = offline.createBufferSource();
+            src.buffer = decoded;
+            src.connect(offline.destination);
+            src.start();
+            const rendered = await offline.startRendering();
+            const wav = encodeWav(rendered.getChannelData(0), rate);
+            await audioCtx.close();
+            const res = await transcribe({ audioBase64: bytesToBase64(wav) });
+            if (res && res.ok === false) throw new Error((res.error && res.error.message) || t.voiceFailed);
+            const text = res && res.value ? String(res.value.text || '').trim() : '';
+            if (!text) { voiceFail(qid, t.voiceEmptyText); return; }
+            setQNotes((prev) => {
+              const cur = String(prev[qid] || '');
+              const joined = cur ? cur + (cur.endsWith('\n') ? '' : '\n') + text : text;
+              return Object.assign({}, prev, { [qid]: joined });
+            });
+            setPhase('idle');
+          } catch (e) {
+            voiceFail(qid, (e && e.message) || t.voiceFailed);
+          } finally {
+            stopTicker();
+            setVoiceQid('');
+            setVoiceSeconds(0);
+            voiceRef.current = null;
+          }
+        };
+        voiceRef.current = { stop: () => { if (rec.state === 'recording') rec.stop(); } };
+        rec.start();
+        setVoiceQid(qid);
+        setVoiceSeconds(0);
+        stopTicker();
+        voiceTimer.current = setInterval(() => setVoiceSeconds((n) => n + 1), 1000);
+      };
+
+      const stopVoice = () => { const v = voiceRef.current; if (v) v.stop(); };
+      const toggleVoice = (qid) => {
+        if (voiceQid === qid) { stopVoice(); return; }
+        if (voiceQid) return;
+        void startVoice(qid);
+      };
+
+      // 组件卸载时释放麦克风
+      useEffect(() => () => {
+        stopTicker();
+        const v = voiceRef.current;
+        if (v) { try { v.stop(); } catch (e) { /* 忽略 */ } }
+      }, []);
+
       const onSend = async () => {
         // ==================================================================
         //  ⭐⭐【2026-10 防重复提交（两道闸）】
@@ -946,7 +1091,17 @@ window.__ModuleLoader__.load({
                           rows: 2,
                           value: qNotes[q.id] || '',
                           onChange: (e) => setQNote(q.id, e.target.value),
-                        })),
+                        }),
+                        // ⭐【0.7.1】语音输入：录→转写→追加到这道题的备注
+                        h('div', { className: 'wg-voice-row' },
+                          h('button', {
+                            className: 'wg-mic' + (voiceQid === q.id ? ' wg-mic-on' : ''),
+                            title: voiceQid === q.id ? t.voiceStop : t.voiceStart,
+                            onClick: () => toggleVoice(q.id),
+                          }, voiceQid === q.id ? t.voiceStop + ' ' + voiceSeconds + 's' : t.voiceStart),
+                          voiceError && voiceErrorQid === q.id
+                            ? h('span', { className: 'wg-voice-error' }, voiceError)
+                            : null)),
                       // ⭐【0.6.1】附件：点按钮选文件 / 在备注框里 Ctrl+V 粘贴
                       h('div', { className: 'wg-attach' },
                         h('div', { className: 'wg-attach-bar' },
@@ -1431,6 +1586,20 @@ window.__ModuleLoader__.load({
 .wg-q-continue .wg-no{color:var(--wg-text-3)}
 .wg-q-continue .wg-q-title{color:var(--wg-text-2)}
 
+/* 24 · 整题备注的语音输入 */
+.wg-voice-row{display:flex;align-items:center;gap:8px;margin-top:6px}
+.wg-mic{flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 10px;
+  border:1px dashed var(--wg-line-2);border-radius:6px;background:transparent;color:var(--wg-text-2);
+  font:inherit;font-size:11px;line-height:1;cursor:pointer;
+  transition:border-color 140ms ease-out,color 140ms ease-out,background-color 140ms ease-out}
+.wg-mic:hover:not(.wg-mic-on){border-color:var(--wg-accent);color:var(--wg-text)}
+.wg-mic-on{border-style:solid;border-color:var(--wg-bad);color:var(--wg-bad);
+  background:color-mix(in srgb,var(--wg-bad) 8%,transparent)}
+.wg-mic-on::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.wg-mic:focus-visible{outline:2px solid var(--wg-brand);outline-offset:1px}
+.wg-voice-error{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:11px;line-height:16px;color:var(--wg-bad)}
+
 /* 12 · 提交中冻结 */
 .wg-wrap[data-phase="sending"] .wg-opt{pointer-events:none}
 @media (prefers-reduced-motion: reduce){
@@ -1540,6 +1709,26 @@ window.__ModuleLoader__.load({
       };
 
       /**
+       * ⭐【0.7.1】语音转写：宿主客户端服务 ctx.remote.speech.transcribe
+       *   输入 { audioBase64 }（16kHz 单声道 WAV），返回 { ok, value: { text, ... } }
+       *   宿主没启用语音插件 / 模型未就绪时，返回 ok:false 让面板提示。
+       */
+      const transcribeSpeech = async (request) => {
+        try {
+          let remote = null;
+          try { remote = ctx.remote; } catch (e) { remote = null; }
+          if (!remote || !remote.speech) remote = ctx.get('remote');
+          const speech = remote && remote.speech;
+          if (!speech || typeof speech.transcribe !== 'function') {
+            return { ok: false, error: { message: '当前 DSH 未提供语音转写服务' } };
+          }
+          return await speech.transcribe(request);
+        } catch (e) {
+          return { ok: false, error: { message: e && e.message ? e.message : String(e) } };
+        }
+      };
+
+      /**
        * ⭐【2026-10 新增】收起右侧栏（用户点「提交拍板」后调用）
        *
        * 【为什么要收】提交完这一轮就该把注意力放回 AI 的回复上；
@@ -1593,7 +1782,7 @@ window.__ModuleLoader__.load({
         name: 'sidebar.right.pane.tab',
         key: TAB_ID,
         locale: NS,
-        inject: () => ({ t, submit, collapse: collapseSidebar, upload: uploadAttachment, cancel: cancelGate }),
+        inject: () => ({ t, submit, collapse: collapseSidebar, upload: uploadAttachment, cancel: cancelGate, transcribe: transcribeSpeech }),
       }, GatePanelMemo));
 
       ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
