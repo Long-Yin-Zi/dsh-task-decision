@@ -154,6 +154,7 @@ q2（推进节奏）: 选 a「做完一项再汇报」
 
 | 版本 | 内容 |
 |---|---|
+| 0.7.3 | 真正修复语音注入报错：`package.json` 的 `dsh.client.inject` 补上 `@deepseek-ai/dsh-api-remotes`（之前只声明了模块 inject，但 manifest 没加载 remote 服务）；注入错误也换成中文提示 |
 | 0.7.2 | ① 语音按钮改成麦克风图标（录音中变红色停止方块 + 秒数）② 修复 `cannot get property 'remote.speech' without inject`：插件声明 `remote` 依赖 |
 | 0.7.1 | 整题备注支持语音输入：录音→16kHz WAV→宿主 speech.transcribe 转写→追加到备注；含麦克风权限/未就绪提示 |
 | 0.7.0 | ① 插件改名 `dsh-task-decision`（包名 / 仓库 / 本地目录统一）② 每轮末尾固定附加「继续深挖还是直接开干」单选题，必答；选「先讨论」则回传要求 AI 先讲思路/影响面/闭环，选「直接开干」则直接执行 | 

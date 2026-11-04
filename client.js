@@ -1736,7 +1736,12 @@ window.__ModuleLoader__.load({
           }
           return await speech.transcribe(request);
         } catch (e) {
-          return { ok: false, error: { message: e && e.message ? e.message : String(e) } };
+          const msg = e && e.message ? e.message : String(e);
+          // Cordis 的注入报错对用户不可读，换成可执行的提示
+          if (/without inject|not declared|service not found/i.test(msg)) {
+            return { ok: false, error: { message: '语音服务未加载（插件缺少 remote 依赖，请更新到 0.7.3 之后）' } };
+          }
+          return { ok: false, error: { message: msg } };
         }
       };
 
