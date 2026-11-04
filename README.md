@@ -154,6 +154,7 @@ q2（推进节奏）: 选 a「做完一项再汇报」
 
 | 版本 | 内容 |
 |---|---|
+| 0.7.5 | 语音改用 `ctx.get('remote')` 可选查找：直接写 `ctx.remote` 会受 Cordis fiber.inject 约束，而插件由宿主 bundle 加载、模块导出的 inject 未被采纳，因此仍抛 without inject |
 | 0.7.4 | 修“面板弹出但空白”：① 工具卡作为第二条数据通道（从 toolview 的 block 直接解析并写 store）② 解析兼容嵌套/变体字段（args/input/arguments/block…）③ 探针解析失败后 600ms×3 重试 ④ 空态文案改为「本轮还没有拍板项」+ 排查提示 |
 | 0.7.3 | 真正修复语音注入报错：`package.json` 的 `dsh.client.inject` 补上 `@deepseek-ai/dsh-api-remotes`（之前只声明了模块 inject，但 manifest 没加载 remote 服务）；注入错误也换成中文提示 |
 | 0.7.2 | ① 语音按钮改成麦克风图标（录音中变红色停止方块 + 秒数）② 修复 `cannot get property 'remote.speech' without inject`：插件声明 `remote` 依赖 |

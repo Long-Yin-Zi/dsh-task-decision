@@ -1816,9 +1816,18 @@ window.__ModuleLoader__.load({
        */
       const transcribeSpeech = async (request) => {
         try {
-          const speech = ctx.remote && ctx.remote.speech;
+          // ⭐【0.7.5】用 ctx.get 做可选查找：
+          //   直接写 ctx.remote 会受 Cordis fiber.inject 声明约束，
+          //   而我们的插件由宿主 bundle 加载，模块导出的 inject 未被采纳，
+          //   所以一律抛 cannot get property … without inject。
+          let remote = null;
+          try { remote = ctx.get('remote'); } catch (e) { remote = null; }
+          if (!remote) {
+            return { ok: false, error: { message: '当前 DSH 未加载 remote 服务（语音不可用）' } };
+          }
+          const speech = remote.speech;
           if (!speech || typeof speech.transcribe !== 'function') {
-            return { ok: false, error: { message: '当前 DSH 未提供语音转写服务' } };
+            return { ok: false, error: { message: '当前 DSH 未启用语音转写服务' } };
           }
           return await speech.transcribe(request);
         } catch (e) {
