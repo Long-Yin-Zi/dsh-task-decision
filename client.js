@@ -1250,7 +1250,10 @@ window.__ModuleLoader__.load({
               })),
 
               // ⭐【0.7.0】固定附加的最后一题：继续深挖，还是直接开干（不占 gate 题数）
-              readonly
+              // ⭐【0.8.2】没有拍板项时不显示继续思考题（没东西可拍，问“怎么走”无意义）
+              total === 0
+                ? null
+                : readonly
                 ? (replay && replay.continueChoice
                   ? h('div', { className: 'wg-q wg-q-continue', 'data-answered': 'true' },
                     h('div', { className: 'wg-q-top' },
@@ -1312,7 +1315,7 @@ window.__ModuleLoader__.load({
               onChange: (e) => setOverall(e.target.value),
             }) : null)),
 
-        h('div', { className: 'wg-foot' },
+        total === 0 ? null : h('div', { className: 'wg-foot' },
           phase === 'error' && err
             ? h('div', { className: 'wg-error' },
               h('span', { className: 'wg-error-dot' }),
