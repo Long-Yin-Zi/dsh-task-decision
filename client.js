@@ -268,6 +268,20 @@ window.__ModuleLoader__.load({
       return null;
     }
 
+    /**
+     * ⭐【0.8.7】只取「本轮」的节点：最后一条用户消息之后的部分。
+     *   【为什么必须有】本轮 AI 没调 gate_ask 时，parseToolGate 会从后往前找到
+     *   上一轮的 gate_ask，把它当成本轮 —— 表现为“已经选过的旧拍板又弹出来”。
+     */
+    function lastTurnNodes(nodes) {
+      if (!Array.isArray(nodes)) return [];
+      for (let i = nodes.length - 1; i >= 0; i -= 1) {
+        const n = nodes[i];
+        if (n && (n.kind === 'user' || n.role === 'user')) return nodes.slice(i + 1);
+      }
+      return nodes;
+    }
+
     function parseToolGate(nodes) {
       if (!Array.isArray(nodes)) return null;
       for (let i = nodes.length - 1; i >= 0; i -= 1) {
@@ -379,7 +393,8 @@ window.__ModuleLoader__.load({
       const unfinished = prev && prev.gate
         && Array.isArray(prev.gate.questions) && prev.gate.questions.length > 0
         && prev.submittedKey !== prev.key
-        && prev.cancelledKey !== prev.key;
+        && prev.cancelledKey !== prev.key
+        && prev.touchedKey !== prev.key;
       if (unfinished) {
         // 旧题留在面板里，顶部会提示“新一轮已到达”，用户提交/取消后自动切过去
         gates.set(sessionId, Object.assign({}, prev, { incoming: gate }));
@@ -415,6 +430,18 @@ window.__ModuleLoader__.load({
       });
       emit();
       return true;
+    }
+
+    /**
+     * ⭐【0.8.7】标记「用户动过这一轮」（选过选项 / 写过备注）。
+     *   【为什么】以前只看 submittedKey/cancelledKey，用户选了但没提交时，
+     *   下一轮到达会把这轮当“未完成”排队 —— 面板里又冒出已经选过的旧题。
+     *   动过就算处理过，新一轮直接覆盖。
+     */
+    function markTouched(sessionId) {
+      const row = gates.get(sessionId);
+      if (!row || row.touchedKey === row.key) return;
+      gates.set(sessionId, Object.assign({}, row, { touchedKey: row.key }));
     }
 
     // 用户点过「提交拍板」后，角标不再计数（否则提交完还显示 3 条）
@@ -498,13 +525,16 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (running) { retryRef.current = 0; return undefined; }   // 流式输出中不解析
         if (!nodes || !nodes.length) return undefined;
+        // ⭐【0.8.7】只看本轮（最后一轮用户消息之后），否则本轮没调工具时会回退到上一轮的 gate
+        const turnNodes = lastTurnNodes(nodes);
+        if (!turnNodes.length) return undefined;
         // 1) 主路径：工具调用 gate_ask 的参数（含嵌套 / 变体字段）
-        let gate = parseToolGate(nodes);
+        let gate = parseToolGate(turnNodes);
         // 2) 兼容路径：正文里的文本标记块
         if (!gate) {
           let text = '';
-          for (let i = nodes.length - 1; i >= 0; i -= 1) {
-            const node = nodes[i];
+          for (let i = turnNodes.length - 1; i >= 0; i -= 1) {
+            const node = turnNodes[i];
             if (!node || node.kind !== 'assistant' || !Array.isArray(node.blocks)) continue;
             text = node.blocks
               .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
@@ -795,6 +825,7 @@ window.__ModuleLoader__.load({
       }
 
       const toggle = (q, oid) => {
+        markTouched(sessionId);   // ⭐0.8.7 用户选过 → 来新一轮时不再把这轮当“未完成”排队
         setPicked((prev) => {
           const cur = prev[q.id] || [];
           if (q.type === 'multi') {
@@ -808,6 +839,7 @@ window.__ModuleLoader__.load({
         setInvalid(false);
       };
       const setNote = (qid, oid, value) => {
+        markTouched(sessionId);   // ⭐0.8.7 动过就算处理过
         setNotes((prev) => {
           const q = Object.assign({}, prev[qid] || {});
           q[oid] = value;
@@ -816,6 +848,7 @@ window.__ModuleLoader__.load({
       };
       // ⭐【2026-10】整题备注：写一个字就不再算"这题没答"
       const setQNote = (qid, value) => {
+        markTouched(sessionId);   // ⭐0.8.7 动过就算处理过
         setQNotes((prev) => Object.assign({}, prev, { [qid]: value }));
         setPhase('idle');
         setInvalid(false);
@@ -1400,6 +1433,7 @@ window.__ModuleLoader__.load({
                           'data-on': continueChoice === pair[0] ? 'true' : 'false',
                           'data-type': 'single',
                           onClick: () => {
+                            markTouched(sessionId);   // ⭐0.8.7 继续题也算动过
                             setContinueChoice(pair[0]);
                             setContinueInvalid(false);
                             setPhase('idle');
@@ -2110,7 +2144,7 @@ window.__ModuleLoader__.load({
 
     // 【调试出口】只读，供本地测试校验解析与回传格式
     try {
-      window.__GATE_DEBUG__ = { extractGate, parseToolGate, normalizeGate, buildReturn, buildPromptContent, fmtBytes, setGate, applyIncoming, getGate, markSubmitted, cancelGate, sendToSession, makeT, gates, isHandled, addHandled, isOpened, markOpened };
+      window.__GATE_DEBUG__ = { extractGate, parseToolGate, normalizeGate, buildReturn, buildPromptContent, fmtBytes, setGate, applyIncoming, getGate, markSubmitted, cancelGate, sendToSession, makeT, gates, isHandled, addHandled, isOpened, markOpened, lastTurnNodes, markTouched };
     } catch (e) { /* 没有 window 也不影响插件 */ }
 
     return { inject, apply };
