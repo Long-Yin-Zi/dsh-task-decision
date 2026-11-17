@@ -370,6 +370,21 @@ window.__ModuleLoader__.load({
         window.localStorage.setItem(OPENED_PREFIX + sessionId, JSON.stringify(list.slice(-30)));
       } catch (e) { /* 隐私模式 / 无 localStorage 时忽略 */ }
     }
+
+    // ⭐【0.8.8】每轮 gate 只登记一次（内存标记）。
+    //   【为什么】探针会因为 nodes 变化反复解析同一条 gate_ask；store 可能已经被
+    //   新一轮替换，旧轮再被写回来就会被当成“新一轮”排队 —— 表现为你已经答过的
+    //   旧拍板又冒出来，顶部还提示“新一轮已到达”。登记过一次就跳过。
+    const registeredKeys = new Map();   // sessionId -> Set(key)
+    function isRegistered(sessionId, key) {
+      const set = registeredKeys.get(sessionId);
+      return !!(set && set.has(key));
+    }
+    function markRegistered(sessionId, key) {
+      let set = registeredKeys.get(sessionId);
+      if (!set) { set = new Set(); registeredKeys.set(sessionId, set); }
+      set.add(key);
+    }
     const listeners = new Set();
     function emit() { listeners.forEach((fn) => fn()); }
     function subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }
@@ -387,6 +402,8 @@ window.__ModuleLoader__.load({
       const prev = gates.get(sessionId);
       if (prev && prev.key === key) return 'same';
       const handled = isHandled(sessionId, key);
+      // ⭐【0.8.8】已提交/已取消的轮次不再写回 store（探针会反复解析到它）
+      if (handled) return 'same';
       // ⭐【0.8.4】只有「有题且未提交/未取消」的旧轮才值得排队。
       //   0 题的 gate（本轮无待拍板）没有提交按钮，永远算“未完成”，
       //   以前会让顶部「切到新一轮」提示常年常驻。
@@ -553,11 +570,15 @@ window.__ModuleLoader__.load({
           return undefined;
         }
         retryRef.current = 0;
+        // ⭐【0.8.8】这一轮已经登记过就不再写 store（避免旧轮被写回来当新轮排队）
+        const key = JSON.stringify(gate);
+        if (isRegistered(sessionId, key)) return undefined;
+        markRegistered(sessionId, key);
         const changed = setGate(sessionId, gate);
         // 'queued'（旧轮未完成，新一轮排队）也要把面板打开提醒用户
         // ⭐【0.8.6】自动打开的判据：这一轮没处理过、也没弹过。
         //   弹过就落盘，切会话 / 刷新不会重复弹；新的一轮照常弹。
-        const key = JSON.stringify(gate);
+        // 打开判断复用上面算好的 key
         if (changed !== 'same' && gate.questions.length
             && typeof onGate === 'function'
             && !isHandled(sessionId, key) && !isOpened(sessionId, key)) {
