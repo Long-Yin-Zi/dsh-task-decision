@@ -3,6 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![DSH Plugin](https://img.shields.io/badge/DSH-plugin-4D6BFE.svg)](https://dsh-plugin.org)
 
+> 维护者请看 [HANDOVER.md](./HANDOVER.md)：架构、状态机、Docker 部署注意事项、排障手册、红线与验收清单。
 **装上它之后**：AI 每轮不再在正文里堆一长串"需要你拍板的问题"，而是把「本轮总结 + 待决问题」收进右侧边栏的一个 tab —— 你一次选完、每题都能写备注、点一下提交，答案自动带着问题标题发回会话，AI 接着干活。
 
 > 解决的核心痛点：多轮开发里 AI 经常一次抛出 3~5 个决策点，散落在正文里，容易漏答、答错题号；回传时 AI 又容易忘记"q1 到底问的是什么"。
